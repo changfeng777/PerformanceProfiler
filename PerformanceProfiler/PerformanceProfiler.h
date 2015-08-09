@@ -1,17 +1,45 @@
 #pragma once
 
+#include <iostream>
 #include<stdarg.h>
 #include<time.h>
 #include<assert.h>
-
 #include <string>
 #include <map>
 
 // C++11
 #include <mutex>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif // _WIN32
+
 using namespace std;
 
 typedef long long LongType;
+
+#if(defined(_WIN32) && defined(_IMPORT))
+	#define API_EXPORT _declspec(dllimport)
+#elif _WIN32
+	#define API_EXPORT _declspec(dllexport)
+#else
+	#define API_EXPORT
+#endif
+
+//
+// 获取当前线程id
+//
+static int GetThreadId()
+{
+#ifdef _WIN32
+	return ::GetCurrentThreadId();
+#else
+	return ::thread_self();
+#endif
+}
 
 // 保存适配器抽象基类
 class SaveAdapter
@@ -102,7 +130,7 @@ T* Singleton<T>::_sInstance = new T();
 //
 // 性能剖析节点
 //
-struct PerformanceNode
+struct API_EXPORT PerformanceNode
 {
 	string _fileName;	// 文件名
 	string _function;	// 函数名
@@ -122,28 +150,33 @@ struct PerformanceNode
 //
 // 性能剖析段
 //
-class PerformanceProfilerSection
+class API_EXPORT PerformanceProfilerSection
 {
-	//typedef unordered_map<int, LongType> StatMap;
-	typedef map<int, LongType> StatMap;
+	//typedef unordered_map<thread::id, LongType> StatisMap;
+	typedef map<int, LongType> StatisMap;
 
 	friend class PerformanceProfiler;
 public:
 	PerformanceProfilerSection()
-		:_beginTime(0)
-		, _costTime(0)
+		:_totalRef(0)
 	{}
 
-	void begin(int id = 0);
-	void end(int id = 0);
+	void begin(int threadId);
+	void end(int threadId);
 
 	void Serialize(SaveAdapter& SA);
 private:
-	LongType _beginTime;		// 开始时间
-	LongType _costTime;			// 花费时间
+	mutex _mutex;					// 互斥锁
+	StatisMap _beginTimeMap;		// 开始时间统计
+	StatisMap _costTimeMap;			// 花费时间统计
+
+	StatisMap _refCountMap;			// 引用计数(解决剖析段首尾不匹配，递归测试)
+	LongType _totalRef;				// 总的引用计数
+
+	StatisMap _callCountMap;		// 调用次数统计
 };
 
-class PerformanceProfiler : public Singleton<PerformanceProfiler>
+class API_EXPORT PerformanceProfiler : public Singleton<PerformanceProfiler>
 {
 	friend class Singleton<PerformanceProfiler>;
 	typedef map<PerformanceNode, PerformanceProfilerSection*> PerformanceProfilerMap;
@@ -167,6 +200,7 @@ protected:
 	// 输出序列化信息
 	void _OutPut(SaveAdapter& SA);
 private:
+	mutex _mutex;
 	PerformanceProfilerMap _ppMap;
 };
 
@@ -178,11 +212,11 @@ private:
 #define PERFORMANCE_PROFILER_EE_BEGIN(sign, desc)		\
 	PerformanceProfilerSection* PPS_##sign = NULL;		\
 	PPS_##sign = PerformanceProfiler::GetInstance()->CreateSection(__FILE__, __FUNCTION__, __LINE__, desc);\
-	PPS_##sign->begin();								\
+	PPS_##sign->begin(GetThreadId());					\
 
 //
 // 剖析效率结束
 // @sign是剖析段唯一标识
 //
 #define PERFORMANCE_PROFILER_EE_END(sign)				\
-	PPS_##sign->end();
+	PPS_##sign->end(GetThreadId());

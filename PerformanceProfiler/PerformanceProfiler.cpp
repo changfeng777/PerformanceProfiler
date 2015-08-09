@@ -34,12 +34,23 @@ bool PerformanceNode::operator<(const PerformanceNode& p) const
 {
 	if (_line > p._line)
 		return false;
+
+	if (_line < p._line)
+		return true;
+
 	if (_fileName > p._fileName)
 		return false;
+	
+	if (_fileName < p._fileName)
+		return true;
+
 	if (_function > p._function)
 		return false;
 
-	return true;
+	if (_function < p._function)
+		return true;
+
+	return false;
 }
 
 void PerformanceNode::Serialize(SaveAdapter& SA) const
@@ -52,7 +63,28 @@ void PerformanceNode::Serialize(SaveAdapter& SA) const
 //PerformanceProfilerSection
 void PerformanceProfilerSection::Serialize(SaveAdapter& SA)
 {
-	SA.Save("CostTime:%.2f\n", (float)_costTime / CLOCKS_PER_SEC);
+	// 若总的引用计数不等于0，则表示剖析段不匹配
+	if (_totalRef)
+		SA.Save("Performance Profiler Not Match!\n");
+
+	LongType totalTime = 0;
+	LongType totalCallCount = 0;
+	auto costTimeIt = _costTimeMap.begin();
+	for (; costTimeIt != _costTimeMap.end(); ++costTimeIt)
+	{
+		LongType callCount = _callCountMap[costTimeIt->first];
+		SA.Save("Thread Id:%d, Cost Time:%.2f, Call Count:%d\n",
+			 costTimeIt->first, 
+			(double)costTimeIt->second / CLOCKS_PER_SEC,
+			callCount);
+
+		totalTime += costTimeIt->second;
+		totalCallCount += callCount;
+	}
+
+	SA.Save("Total Cost Time:%.2f, Total Call Count:%d\n",
+		(double)totalTime / CLOCKS_PER_SEC,
+		totalCallCount);
 }
 
 //////////////////////////////////////////////////////////////
@@ -62,6 +94,8 @@ PerformanceProfilerSection* PerformanceProfiler::CreateSection(const char* fileN
 {
 	PerformanceProfilerSection* section = NULL;
 	PerformanceNode node(fileName, function, line, extraDesc);
+
+	unique_lock<mutex> Lock(_mutex);
 	auto it = _ppMap.find(node);
 	if (it != _ppMap.end())
 	{
@@ -76,14 +110,47 @@ PerformanceProfilerSection* PerformanceProfiler::CreateSection(const char* fileN
 	return section;
 }
 
-void PerformanceProfilerSection::begin(int id)
+void PerformanceProfilerSection::begin(int threadId)
 {
-	_beginTime = clock();
+	unique_lock<mutex> Lock(_mutex);
+
+	// 更新调用次数统计
+	++_callCountMap[threadId];
+
+	// 引用计数 == 0 时更新段开始时间统计，解决剖析递归程序的问题。
+	auto& refCount = _refCountMap[threadId];
+	if (refCount == 0)
+		_beginTimeMap[threadId] = clock();
+
+	// 更新剖析段开始结束的引用计数统计
+	++refCount;
+	++_totalRef;
 }
 
-void PerformanceProfilerSection::end(int id)
+void PerformanceProfilerSection::end(int threadId)
 {
-	_costTime += (clock() - _beginTime);
+	unique_lock<mutex> Lock(_mutex);
+
+	// 更新引用计数
+	LongType refCount = --_refCountMap[threadId];
+	--_totalRef;
+
+	//
+	// 引用计数 <= 0 时更新剖析段花费时间。
+	// 解决剖析递归程序的问题和剖析段不匹配的问题
+	//
+	if (refCount <= 0)
+	{
+		auto it = _beginTimeMap.find(threadId);
+		if (it != _beginTimeMap.end())
+		{
+			LongType costTime = clock() - it->second;
+			if (refCount == 0)
+				_costTimeMap[threadId] += costTime;
+			else
+				_costTimeMap[threadId] = costTime;
+		}
+	}
 }
 
 void PerformanceProfiler::OutPut()
@@ -98,11 +165,14 @@ void PerformanceProfiler::OutPut()
 
 void PerformanceProfiler::_OutPut(SaveAdapter& SA)
 {
+	int num = 1;
 	auto it = _ppMap.begin();
 	for (; it != _ppMap.end(); ++it)
 	{
+		SA.Save("NO%d.\n", num++);
 		it->first.Serialize(SA);
 		it->second->Serialize(SA);
+		SA.Save("\n");
 	}
 }
 
