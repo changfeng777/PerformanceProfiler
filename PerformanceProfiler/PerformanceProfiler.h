@@ -1,18 +1,23 @@
 #pragma once
 
 #include <iostream>
-#include<stdarg.h>
-#include<time.h>
-#include<assert.h>
+#include <stdarg.h>
+#include <time.h>
+#include <assert.h>
 #include <string>
 #include <map>
 
 // C++11
+#include <unordered_map>
 #include <mutex>
 #include <thread>
+#include <atomic>
+#include <condition_variable>
 
 #ifdef _WIN32
-#include <windows.h>
+#include <Windows.h>
+#include<Psapi.h>
+#pragma comment(lib,"Psapi.lib")
 #else
 #include <pthread.h>
 #endif // _WIN32
@@ -127,6 +132,121 @@ protected:
 template<class T>
 T* Singleton<T>::_sInstance = new T();
 
+
+enum PP_CONFIG_OPTION
+{
+	PPCO_NONE = 0,					// 不做剖析
+	PPCO_PROFILER = 2,				// 开启剖析
+	PPCO_SAVE_TO_CONSOLE = 4,		// 保存到控制台
+	PPCO_SAVE_TO_FILE = 8,			// 保存到文件
+};
+
+//
+// 配置管理
+//
+class API_EXPORT ConfigManager : public Singleton<ConfigManager>
+{
+public:
+	void SetOptions(int flag)
+	{
+		_flag = flag;
+	}
+	int GetOptions()
+	{
+		return _flag;
+	}
+
+	ConfigManager()
+		:_flag(PPCO_NONE)
+	{}
+private:
+	int _flag;
+};
+
+///////////////////////////////////////////////////////////////////////////
+// 资源统计
+
+// 资源统计信息
+struct ResourceInfo
+{
+	LongType _peak;	 // 最大峰值
+	LongType _avg;	 // 平均值
+
+	LongType _total;  // 总值
+	LongType _count;  // 次数
+
+	ResourceInfo()
+		: _peak(0), _avg(0), _total(0),_count(0)
+	{}
+
+	void Update(LongType value);
+	void Serialize(SaveAdapter& SA) const;
+};
+
+static const int CPU_TIME_SLICE_UNIT = 100;
+
+// 资源统计
+class ResourceStatistics
+{
+public:
+	ResourceStatistics();
+	~ResourceStatistics();
+
+	// 开始统计
+	void StartStatistics();
+
+	// 停止统计
+	void StopStatistics();
+
+	// 获取CPU/内存信息 
+	const ResourceInfo& GetCpuInfo();
+	const ResourceInfo& GetMemoryInfo();
+
+private:
+	void _Statistics();
+
+// Windows下计算资源占用
+#ifdef _WIN32
+	// 获取CPU个数 / 获取内核时间
+	int _GetCpuCount();
+	LongType _GetKernelTime();
+
+	// 获取CPU/内存/IO信息
+	LongType _GetCpuUsageRate();
+	LongType _GetMemoryUsage();
+	void _GetIOUsage(LongType& readBytes, LongType& writeBytes);
+
+	// 更新统计信息
+	void _UpdateStatistics();
+#else // Linux
+	void _UpdateStatistics();
+#endif
+
+public:
+#ifdef _WIN32
+	int	_cpuCount;				// CPU个数
+	HANDLE _processHandle;		// 进程句柄
+
+	LongType _lastSystemTime;	// 最近的系统时间
+	LongType _lastKernelTime;	// 最近的内核时间
+#else
+	int _pid;					// 进程ID
+#endif // _WIN32
+
+	ResourceInfo _cpuInfo;				// CPU信息
+	ResourceInfo _memoryInfo;			// 内存信息
+	ResourceInfo _readIOInfo;			// 读数据信息
+	ResourceInfo _writeIOInfo;			// 写数据的信息
+
+	atomic<bool> _isStatistics;			// 是否进行统计的标志
+	mutex	_lockMutex;					// 线程互斥锁
+	condition_variable _condVariable;	// 控制是否进行统计的条件变量
+	thread _statisticsThread;			// 统计线程
+};
+
+///////////////////////////////////////////////////////////////////////////
+// 代码段剖析
+
 //
 // 性能剖析节点
 //
@@ -142,9 +262,38 @@ struct API_EXPORT PerformanceNode
 
 	// 做map键值，所以需要重载operator<
 	bool operator<(const PerformanceNode& p) const;
+	bool operator==(const PerformanceNode& p) const;
 
 	// 序列化节点信息到容器
 	void Serialize(SaveAdapter& SA) const;
+};
+
+// hash算法
+static size_t BKDRHash(const char *str)
+{
+	unsigned int seed = 131; // 31 131 1313 13131 131313
+	unsigned int hash = 0;
+
+	while (*str)
+	{
+		hash = hash * seed + (*str++);
+	}
+
+	return (hash & 0x7FFFFFFF);
+}
+
+// PerformanceNode做非排序容器key的Hash算法
+class PerformanceNodeHash
+{
+public:
+	size_t operator() (const PerformanceNode& p)
+	{
+		string key = p._function;
+		key += p._fileName;
+		key += p._line;
+
+		return BKDRHash(key.c_str());
+	}
 };
 
 //
@@ -153,12 +302,13 @@ struct API_EXPORT PerformanceNode
 class API_EXPORT PerformanceProfilerSection
 {
 	//typedef unordered_map<thread::id, LongType> StatisMap;
-	typedef map<int, LongType> StatisMap;
+	typedef unordered_map<int, LongType> StatisMap;
 
 	friend class PerformanceProfiler;
 public:
 	PerformanceProfilerSection()
 		:_totalRef(0)
+		, _rsStatistics(0)
 	{}
 
 	void begin(int threadId);
@@ -174,19 +324,22 @@ private:
 	LongType _totalRef;				// 总的引用计数
 
 	StatisMap _callCountMap;		// 调用次数统计
+
+	ResourceStatistics* _rsStatistics;	// 资源统计线程对象
 };
 
 class API_EXPORT PerformanceProfiler : public Singleton<PerformanceProfiler>
 {
 	friend class Singleton<PerformanceProfiler>;
-	typedef map<PerformanceNode, PerformanceProfilerSection*> PerformanceProfilerMap;
+	typedef unordered_map<PerformanceNode, PerformanceProfilerSection*, PerformanceNodeHash> PerformanceProfilerMap;
+	//typedef map<PerformanceNode, PerformanceProfilerSection*> PerformanceProfilerMap;
 
 public:
 	//
 	// 创建剖析段
 	//
 	PerformanceProfilerSection* CreateSection(const char* fileName,
-		const char* funcName, int line, const char* desc);
+		const char* funcName, int line, const char* desc, bool isStatistics);
 
 	static void OutPut();
 
@@ -195,28 +348,66 @@ protected:
 	{
 		// 程序结束时输出剖析结果
 		atexit(OutPut);
+
+		time(&_beginTime);
 	}
 
 	// 输出序列化信息
 	void _OutPut(SaveAdapter& SA);
 private:
+	time_t  _beginTime;
 	mutex _mutex;
 	PerformanceProfilerMap _ppMap;
 };
 
+// 添加性能剖析段开始
+#define ADD_PERFORMANCE_PROFILE_SECTION_BEGIN(sign, desc, isStatistics) \
+	PerformanceProfilerSection* PPS_##sign = NULL;						\
+	if (ConfigManager::GetInstance()->GetOptions()&PPCO_PROFILER)		\
+	{																	\
+		PPS_##sign = PerformanceProfiler::GetInstance()->CreateSection(__FILE__, __FUNCTION__, __LINE__, desc, isStatistics);\
+		PPS_##sign->begin(GetThreadId());								\
+	}
+
+// 添加性能剖析段结束
+#define ADD_PERFORMANCE_PROFILE_SECTION_END(sign)	\
+	do{												\
+		if(PPS_##sign)								\
+			PPS_##sign->end(GetThreadId());			\
+	}while(0);
+
 //
-// 剖析效率开始
+// 剖析【效率】开始
 // @sign是剖析段唯一标识，构造出唯一的剖析段变量
 // @desc是剖析段描述
 //
-#define PERFORMANCE_PROFILER_EE_BEGIN(sign, desc)		\
-	PerformanceProfilerSection* PPS_##sign = NULL;		\
-	PPS_##sign = PerformanceProfiler::GetInstance()->CreateSection(__FILE__, __FUNCTION__, __LINE__, desc);\
-	PPS_##sign->begin(GetThreadId());					\
+#define PERFORMANCE_PROFILER_EE_BEGIN(sign, desc)	\
+	ADD_PERFORMANCE_PROFILE_SECTION_BEGIN(sign, desc, false)
 
 //
-// 剖析效率结束
+// 剖析【效率】结束
 // @sign是剖析段唯一标识
 //
-#define PERFORMANCE_PROFILER_EE_END(sign)				\
-	PPS_##sign->end(GetThreadId());
+#define PERFORMANCE_PROFILER_EE_END(sign)	\
+	ADD_PERFORMANCE_PROFILE_SECTION_END(sign)
+
+//
+// 剖析【效率&资源】开始
+// @sign是剖析段唯一标识，构造出唯一的剖析段变量
+// @desc是剖析段描述
+//
+#define PERFORMANCE_PROFILER_EE_RS_BEGIN(sign, desc)	\
+	ADD_PERFORMANCE_PROFILE_SECTION_BEGIN(sign, desc, true)
+
+//
+// 剖析【效率&资源】结束
+// @sign是剖析段唯一标识
+//
+#define PERFORMANCE_PROFILER_EE_RS_END(sign)		\
+	ADD_PERFORMANCE_PROFILE_SECTION_END(sign)
+
+//
+// 设置剖析选项
+//
+#define SET_PERFORMANCE_PROFILER_OPTIONS(flag)		\
+	ConfigManager::GetInstance()->SetOptions(flag)
