@@ -2,18 +2,18 @@
 
 //////////////////////////////////////////////////////////////
 // 资源统计剖析
-
-static void RecordErrorLog(const char* errMsg, int line)
-{
-#ifdef _WIN32
-	printf("%s. ErrorId:%d, Line:%d\n", errMsg, GetLastError(), line);
-#else
-	printf("%s. ErrorId:%d, Line:%d\n", errMsg, errno, line);
-#endif
-}
-
-#define RECORD_ERROR_LOG(errMsg)		\
-	RecordErrorLog(errMsg, __LINE__);
+//
+//static void RecordErrorLog(const char* errMsg, int line)
+//{
+//#ifdef _WIN32
+//	printf("%s. ErrorId:%d, Line:%d\n", errMsg, GetLastError(), line);
+//#else
+//	printf("%s. ErrorId:%d, Line:%d\n", errMsg, errno, line);
+//#endif
+//}
+//
+//#define RECORD_ERROR_LOG(errMsg)		\
+//	RecordErrorLog(errMsg, __LINE__);
 
 void ResourceInfo::Update(LongType value)
 {
@@ -232,6 +232,161 @@ void ResourceStatistics::_UpdateStatistics()
 #endif
 
 //////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////
+// IPC在线控制监听服务
+// IPCMonitorServer
+
+int GetProcessId()
+{
+	int processId = 0;
+
+#ifdef _WIN32
+	processId = GetProcessId(GetCurrentProcess());
+#else
+	processId = getpid();
+#endif
+
+	return processId;
+}
+
+#ifdef _WIN32
+const char* SERVER_PIPE_NAME = "\\\\.\\Pipe\\PPServerPipeName";
+#else
+const char* SERVER_PIPE_NAME = "tmp/performance_profiler/_fifo";
+#endif
+
+string GetServerPipeName()
+{
+	string name = SERVER_PIPE_NAME;
+	//char idStr[10];
+	//_itoa(GetProcessId(), idStr, 10);
+	//name += idStr;
+	return name;
+}
+
+class IPCMonitorServer : public Singleton<IPCMonitorServer>
+{
+	typedef void(*CmdFunc) (string& reply);
+	typedef map<string, CmdFunc> CmdFuncMap;
+
+public:
+	// 启动IPC消息处理服务线程
+	void IPCMonitorServer::Start()
+	{}
+
+protected:
+	// IPC服务线程处理消息的函数
+	void IPCMonitorServer::OnMessage()
+	{
+		const int IPC_BUF_LEN = 1024;
+		char msg[IPC_BUF_LEN] = { 0 };
+		IPCServer server(GetServerPipeName().c_str());
+
+		while (1)
+		{
+			server.ReceiverMsg(msg, IPC_BUF_LEN);
+			printf("Receiver Cmd Msg: %s\n", msg);
+
+			string reply;
+			string cmd = msg;
+			CmdFuncMap::iterator it = _cmdFuncsMap.find(cmd);
+			if (it != _cmdFuncsMap.end())
+			{
+				CmdFunc func = it->second;
+				func(reply);
+			}
+			else
+			{
+				reply = "Invalid Command";
+			}
+
+			server.SendReplyMsg(reply.c_str(), reply.size());
+		}
+	}
+
+	//
+	// 以下均为消息处理函数
+	//
+	static void GetState(string& reply)
+	{
+		reply += "State:";
+		int flag = ConfigManager::GetInstance()->GetOptions();
+
+		if (flag == PPCO_NONE)
+		{
+			reply += "None\n";
+			return;
+		}
+
+		if (flag & PPCO_PROFILER)
+		{
+			reply += "Performance Profiler \n";
+		}
+
+		if (flag & PPCO_SAVE_TO_CONSOLE)
+		{
+			reply += "Save To Console\n";
+		}
+
+		if (flag & PPCO_SAVE_TO_FILE)
+		{
+			reply += "Save To File\n";
+		}
+	}
+
+	static void Enable(string& reply)
+	{
+		ConfigManager::GetInstance()->SetOptions(PPCO_PROFILER| PPCO_SAVE_TO_FILE);
+
+		reply += "Enable Success";
+	}
+
+	static void Disable(string& reply)
+	{
+		ConfigManager::GetInstance()->SetOptions(PPCO_NONE);
+
+		reply += "Disable Success";
+	}
+
+	static void Save(string& reply)
+	{
+		ConfigManager::GetInstance()->SetOptions(
+			ConfigManager::GetInstance()->GetOptions() | PPCO_SAVE_TO_FILE);
+		PerformanceProfiler::GetInstance()->OutPut();
+
+		reply += "Save Success";
+	}
+
+	static void Print(string& reply)
+	{
+		ConfigManager::GetInstance()->SetOptions(
+			ConfigManager::GetInstance()->GetOptions()| PPCO_SAVE_TO_FILE);
+
+		// 这里应该把将剖析信息发回给管道客户端！
+		PerformanceProfiler::GetInstance()->OutPut();
+
+		reply += "Print Success";
+	}
+protected:
+	IPCMonitorServer::IPCMonitorServer()
+		:_onMsgThread(&IPCMonitorServer::OnMessage, this)
+	{
+		printf("%s IPC Monitor Server Start\n", GetServerPipeName().c_str());
+
+		_cmdFuncsMap["state"] = GetState;
+		_cmdFuncsMap["save"] = Save;
+		_cmdFuncsMap["print"] = Print;
+		_cmdFuncsMap["disable"] = Disable;
+		_cmdFuncsMap["enable"] = Enable;
+	}
+
+	friend class Singleton<IPCMonitorServer>;
+private:
+	thread	_onMsgThread;			// 处理消息线程
+	CmdFuncMap _cmdFuncsMap;		// 消息命令到执行函数的映射表
+};
+
+//////////////////////////////////////////////////////////////
 // 代码段效率剖析
 
 //获取路径中最后的文件名。
@@ -419,6 +574,16 @@ void PerformanceProfilerSection::end(int threadId)
 			_rsStatistics->StopStatistics();
 		}
 	}
+}
+
+PerformanceProfiler::PerformanceProfiler()
+{
+	// 程序结束时输出剖析结果
+	atexit(OutPut);
+
+	time(&_beginTime);
+
+	IPCMonitorServer::GetInstance()->Start();
 }
 
 void PerformanceProfiler::OutPut()

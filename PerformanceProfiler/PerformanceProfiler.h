@@ -24,6 +24,8 @@
 
 using namespace std;
 
+#include "../IPC/IPCManager.h"
+
 typedef long long LongType;
 
 #if(defined(_WIN32) && defined(_IMPORT))
@@ -344,13 +346,7 @@ public:
 	static void OutPut();
 
 protected:
-	PerformanceProfiler()
-	{
-		// 程序结束时输出剖析结果
-		atexit(OutPut);
-
-		time(&_beginTime);
-	}
+	PerformanceProfiler();
 
 	// 输出序列化信息
 	void _OutPut(SaveAdapter& SA);

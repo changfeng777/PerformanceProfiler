@@ -4,9 +4,9 @@ using namespace std;
 // C++11
 #include<thread>
 
-#ifndef _IMPORT
-	#define _IMPORT
-#endif // !_IMPORT
+//#ifndef _IMPORT
+//	#define _IMPORT
+//#endif // !_IMPORT
 
 #include "../PerformanceProfiler/PerformanceProfiler.h"
 
@@ -161,10 +161,16 @@ void Test6()
 
 		PERFORMANCE_PROFILER_EE_RS_END(PERFORMANCE_PROFILER_EE_RS);
 
-		PerformanceProfiler::GetInstance()->OutPut();
+		//PerformanceProfiler::GetInstance()->OutPut();
 
-		Sleep(1000);
+		this_thread::sleep_for(std::chrono::milliseconds(1000));
 	}
+}
+
+// ²âÊÔÔÚÏß¿ØÖÆ
+void Test7()
+{
+	Test6();
 }
 
 int main()
@@ -175,7 +181,8 @@ int main()
 	//Test3();
 	//Test4();
 	//Test5();
-	Test6();
+	//Test6();
+	Test7();
 
 	return 0;
 }
