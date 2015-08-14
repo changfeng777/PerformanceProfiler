@@ -100,7 +100,7 @@ void ResourceStatistics::_Statistics()
 		//
 		// 未开始统计时，则使用条件变量阻塞。
 		//
-		if (_refCount++ == 0)
+		if (_refCount == 0)
 		{
 			unique_lock<std::mutex> lock(_lockMutex);
 			_condVariable.wait(lock);

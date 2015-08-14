@@ -4,15 +4,18 @@ using namespace std;
 // C++11
 #include<thread>
 
-//#ifndef _IMPORT
-//	#define _IMPORT
-//#endif // !_IMPORT
+#ifdef _WIN32
+//
+// 解决动态库导出静态变量的问题，UMM中的单例类为静态对象
+// 动态库方式使用时定义宏IMPORT，静态库时去掉，否则无法会链接出错。
+//
+	#ifndef IMPORT
+		#define IMPORT
+	#endif // !IMPORT
+	#pragma comment(lib, "../Debug/PerformanceProfiler.lib")
+#endif // _WIN32
 
 #include "../PerformanceProfiler/PerformanceProfiler.h"
-
-#ifdef _WIN32
-#pragma comment(lib, "../Debug/PerformanceProfiler.lib")
-#endif // _WIN32
 
 // 1.测试基本功能
 void Test1()
@@ -60,7 +63,7 @@ void Test2()
 	t3.join();
 }
 
-// 3.不匹配场景
+// 3.测试剖析段不匹配场景
 void Test3()
 {
 	// 2.正常匹配
@@ -104,7 +107,7 @@ int Fib(int n)
 	return ret;
 }
 
-// 4.递归
+// 4.测试剖析递归程序
 void Test4()
 {
 	PERFORMANCE_PROFILER_EE_BEGIN(Fib1, "正常");
@@ -114,6 +117,7 @@ void Test4()
 	PERFORMANCE_PROFILER_EE_END(Fib1);
 }
 
+// 5.测试基本资源统计情况
 void Test5()
 {
 	PERFORMANCE_PROFILER_EE_RS_BEGIN(PP1, "PP1");
@@ -129,6 +133,10 @@ void Test5()
 	PERFORMANCE_PROFILER_EE_RS_END(PP2);
 }
 
+//
+// http://www.cnblogs.com/Ripper-Y/archive/2012/05/19/2508511.html
+// 6.CPU占用率正玄波动，测试资源统计
+//
 void Test6()
 {
 	SetThreadAffinityMask(GetCurrentProcess(), 0x00000001);
@@ -160,14 +168,16 @@ void Test6()
 		j++;
 
 		PERFORMANCE_PROFILER_EE_RS_END(PERFORMANCE_PROFILER_EE_RS);
-
 		PerformanceProfiler::GetInstance()->OutPut();
 
 		this_thread::sleep_for(std::chrono::milliseconds(1000));
 	}
 }
 
-// 测试在线控制
+//
+// 7.测试在线控制剖析情况
+// 启动Test7以后，cmd下运行PerformanceProfilerTool.exe -pid 进程号 即可测试在线控制
+//
 void Test7()
 {
 	Test6();
@@ -176,12 +186,13 @@ void Test7()
 int main()
 {
 	SET_PERFORMANCE_PROFILER_OPTIONS(PPCO_PROFILER | PPCO_SAVE_TO_CONSOLE);
+
 	//Test1();
 	//Test2();
 	//Test3();
 	//Test4();
 	//Test5();
-	Test6();
+	//Test6();
 	//Test7();
 
 	return 0;
