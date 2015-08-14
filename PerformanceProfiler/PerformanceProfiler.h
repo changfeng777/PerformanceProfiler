@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <string>
 #include <map>
+#include <algorithm>
 
 // C++11
 #include <unordered_map>
@@ -204,6 +205,8 @@ enum PP_CONFIG_OPTION
 	PPCO_PROFILER = 2,				// 开启剖析
 	PPCO_SAVE_TO_CONSOLE = 4,		// 保存到控制台
 	PPCO_SAVE_TO_FILE = 8,			// 保存到文件
+	PPCO_SAVE_BY_CALL_COUNT = 16,	// 按调用次数降序保存
+	PPCO_SAVE_BY_COST_TIME = 32,	// 按调用花费时间降序保存
 };
 
 //
@@ -409,6 +412,8 @@ public:
 	PerformanceProfilerSection()
 		:_totalRef(0)
 		, _rsStatistics(0)
+		, _totalCallCount(0)
+		, _totalCostTime(0)
 	{}
 
 	void Begin(int threadId);
@@ -419,22 +424,31 @@ private:
 	mutex _mutex;					// 互斥锁
 	StatisMap _beginTimeMap;		// 开始时间统计
 	StatisMap _costTimeMap;			// 花费时间统计
+	LongType _totalCostTime;		// 总花费时间
 
 	StatisMap _refCountMap;			// 引用计数(解决剖析段首尾不匹配，递归函数内部段剖析)
 	LongType _totalRef;				// 总的引用计数
 
 	StatisMap _callCountMap;		// 调用次数统计
+	LongType _totalCallCount;		// 总的调用次数
 
 	ResourceStatistics* _rsStatistics;	// 资源统计线程对象
 };
 
 class API_EXPORT PerformanceProfiler : public Singleton<PerformanceProfiler>
 {
+public:
+
 	friend class Singleton<PerformanceProfiler>;
+
+	//
+	// unordered_map内部使用hash_table实现（时间复杂度为），map内部使用红黑树。
+	// unordered_map操作的时间复杂度为O(1)，map为O(lgN)，so! unordered_map更高效。
+	// http://blog.chinaunix.net/uid-20384806-id-3055333.html
+	//
 	typedef unordered_map<PerformanceNode, PerformanceProfilerSection*, PerformanceNodeHash> PerformanceProfilerMap;
 	//typedef map<PerformanceNode, PerformanceProfilerSection*> PerformanceProfilerMap;
 
-public:
 	//
 	// 创建剖析段
 	//
@@ -443,6 +457,12 @@ public:
 
 	static void OutPut();
 protected:
+
+	static bool CompareByCallCount(PerformanceProfilerMap::iterator lhs,
+		PerformanceProfilerMap::iterator rhs);
+	static bool CompareByCostTime(PerformanceProfilerMap::iterator lhs,
+		PerformanceProfilerMap::iterator rhs);
+
 	PerformanceProfiler();
 
 	// 输出序列化信息

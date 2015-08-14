@@ -444,8 +444,7 @@ void PerformanceProfilerSection::Serialize(SaveAdapter& SA)
 	if (_totalRef)
 		SA.Save("Performance Profiler Not Match!\n");
 
-	LongType totalTime = 0;
-	LongType totalCallCount = 0;
+	// 序列化效率统计信息
 	auto costTimeIt = _costTimeMap.begin();
 	for (; costTimeIt != _costTimeMap.end(); ++costTimeIt)
 	{
@@ -454,15 +453,12 @@ void PerformanceProfilerSection::Serialize(SaveAdapter& SA)
 			 costTimeIt->first, 
 			(double)costTimeIt->second / CLOCKS_PER_SEC,
 			callCount);
-
-		totalTime += costTimeIt->second;
-		totalCallCount += callCount;
 	}
 
 	SA.Save("Total Cost Time:%.2f, Total Call Count:%d\n",
-		(double)totalTime / CLOCKS_PER_SEC,
-		totalCallCount);
+		(double)_totalCostTime / CLOCKS_PER_SEC, _totalCallCount);
 
+	// 序列化资源统计信息
 	if (_rsStatistics)
 	{
 		ResourceInfo cpuInfo = _rsStatistics->GetCpuInfo();
@@ -523,6 +519,7 @@ void PerformanceProfilerSection::Begin(int threadId)
 	// 更新剖析段开始结束的引用计数统计
 	++refCount;
 	++_totalRef;
+	++_totalCallCount;
 }
 
 void PerformanceProfilerSection::End(int threadId)
@@ -547,6 +544,8 @@ void PerformanceProfilerSection::End(int threadId)
 				_costTimeMap[threadId] += costTime;
 			else
 				_costTimeMap[threadId] = costTime;
+
+			_totalCostTime += costTime;
 		}
 
 		// 停止资源统计
@@ -583,18 +582,44 @@ void PerformanceProfiler::OutPut()
 	}
 }
 
+bool PerformanceProfiler::CompareByCallCount(PerformanceProfilerMap::iterator lhs,
+	PerformanceProfilerMap::iterator rhs)
+{
+	return lhs->second->_totalCallCount > rhs->second->_totalCallCount;
+}
+
+bool PerformanceProfiler::CompareByCostTime(PerformanceProfilerMap::iterator lhs,
+	PerformanceProfilerMap::iterator rhs)
+{
+	return lhs->second->_totalCostTime > rhs->second->_totalCostTime;
+}
+
 void PerformanceProfiler::_OutPut(SaveAdapter& SA)
 {
 	SA.Save("=============Performance Profiler Report==============\n\n");
 	SA.Save("Profiler Begin Time: %s\n", ctime(&_beginTime));
 
-	int num = 1;
+	unique_lock<mutex> Lock(_mutex);
+
+	vector<PerformanceProfilerMap::iterator> vInfos;
 	auto it = _ppMap.begin();
 	for (; it != _ppMap.end(); ++it)
 	{
-		SA.Save("NO%d. Description:%s\n", num++, it->first._desc.c_str());
-		it->first.Serialize(SA);
-		it->second->Serialize(SA);
+		vInfos.push_back(it);
+	}
+
+	// 按配置条件对剖析结果进行排序输出
+	int flag = ConfigManager::GetInstance()->GetOptions();
+	if (flag & PPCO_SAVE_BY_COST_TIME)
+		sort(vInfos.begin(), vInfos.end(), CompareByCostTime);
+	else if (flag & PPCO_SAVE_BY_CALL_COUNT)
+		sort(vInfos.begin(), vInfos.end(), CompareByCallCount);
+
+	for (int index = 0; index < vInfos.size(); ++index)
+	{
+		SA.Save("NO%d. Description:%s\n", index + 1, vInfos[index]->first._desc.c_str());
+		vInfos[index]->first.Serialize(SA);
+		vInfos[index]->second->Serialize(SA);
 		SA.Save("\n");
 	}
 
