@@ -183,9 +183,175 @@ void Test7()
 	Test6();
 }
 
+//
+// 8.剖析快速排序算法，生成剖析报告，然后进行查看。
+//
+int GetMidIndex(int* array, int left, int right)
+{
+	//return right;
+
+	int mid = left + ((right - left) >> 1);
+
+	if (array[left] < array[right])
+	{
+		if (array[right] < array[mid])
+			return right;
+		else if (array[left] > array[mid])
+			return left;
+		else
+			return mid;
+	}
+	else
+	{
+		if (array[right] > array[mid])
+			return right;
+		else if (array[left] < array[mid])
+			return left;
+		else
+			return mid;
+	}
+}
+
+int Partion(int* array, int left, int right)
+{
+	PERFORMANCE_PROFILER_EE_BEGIN(Partion, "Partion");
+
+	//
+	// prev指向比key大的前一个位置
+	// cur向前寻找比key小的数据。
+	//
+
+	PERFORMANCE_PROFILER_EE_BEGIN(GetMidIndex, "GetMidIndex");
+
+	int keyIndex = GetMidIndex(array, left, right);
+	if (keyIndex != right)
+	{
+		swap(array[keyIndex], array[right]);
+	}
+
+	PERFORMANCE_PROFILER_EE_END(GetMidIndex);
+
+
+	int key = array[right];
+	int prev = left - 1;
+	int cur = left;
+
+	while (cur < right)
+	{
+		// 找到比key的小的数据则与前面的数据进行交换
+		if (array[cur] < key && ++prev != cur)
+		{
+			swap(array[cur], array[prev]);
+		}
+
+		++cur;
+	}
+
+	swap(array[++prev], array[right]);
+
+	PERFORMANCE_PROFILER_EE_END(Partion);
+
+	return prev;
+}
+
+void InsertSort(int* array, int size)
+{
+	assert(array);
+
+	for (int index = 1; index < size; ++index)
+	{
+		// 将当前数据往前插入
+		int insertIndex = index - 1;
+		int tmp = array[index];
+		while (insertIndex >= 0 && tmp < array[insertIndex])
+		{
+			array[insertIndex + 1] = array[insertIndex];
+			--insertIndex;
+		}
+
+		// 注意这里的位置
+		array[insertIndex + 1] = tmp;
+	}
+}
+
+void QuickSort(int* array, int left, int right)
+{
+	PERFORMANCE_PROFILER_EE_BEGIN(QuickSort, "QuickSort_NonOP");
+
+	if (left < right)
+	{
+		PERFORMANCE_PROFILER_EE_BEGIN(Partion, "Partion_NonOP");
+
+		int boundary = Partion(array, left, right);
+
+		PERFORMANCE_PROFILER_EE_END(Partion);
+
+		QuickSort(array, left, boundary - 1);
+		QuickSort(array, boundary + 1, right);
+	}
+
+	PERFORMANCE_PROFILER_EE_END(QuickSort);
+}
+
+void QuickSort_OP(int* array, int left, int right)
+{
+	PERFORMANCE_PROFILER_EE_BEGIN(QuickSort, "QuickSort_OP");
+
+	if (left < right)
+	{
+		int gap = right - left;
+
+		if (gap < 13)
+		{
+			PERFORMANCE_PROFILER_EE_BEGIN(InsertSort, "InsertSort");
+
+			InsertSort(array + left, gap + 1);
+
+			PERFORMANCE_PROFILER_EE_END(InsertSort);
+		}
+		else
+		{
+			PERFORMANCE_PROFILER_EE_BEGIN(Partion, "Partion_OP");
+
+			int boundary = Partion(array, left, right);
+
+			PERFORMANCE_PROFILER_EE_END(Partion);
+
+			QuickSort_OP(array, left, boundary - 1);
+			QuickSort_OP(array, boundary + 1, right);
+		}
+	}
+
+	PERFORMANCE_PROFILER_EE_END(QuickSort);
+}
+
+void Test8()
+{
+	const int num = 100000;
+	int a1[num] = { 0 };
+	int a2[num] = { 0 };
+	srand(time(0));
+	for (int i = 0; i < num; ++i)
+	{
+		int x = rand() % num;
+		a1[i] = x;
+		a2[i] = x;
+	}
+
+	//
+	// 剖析对比优化和未优化的快速排序
+	// 剖析结果反馈优化以后的快速排序比未优化的快速排序效率。
+	// 最终的剖析结果显示优化以后快速排序快了5倍+。
+	//
+
+	QuickSort(a1, 0, num - 1);
+	QuickSort_OP(a2, 0, num - 1);
+}
+
 int main()
 {
-	SET_PERFORMANCE_PROFILER_OPTIONS(PPCO_PROFILER | PPCO_SAVE_TO_CONSOLE);
+	SET_PERFORMANCE_PROFILER_OPTIONS(
+		PPCO_PROFILER | PPCO_SAVE_TO_CONSOLE | PPCO_SAVE_BY_COST_TIME);
 
 	//Test1();
 	//Test2();
@@ -194,6 +360,7 @@ int main()
 	//Test5();
 	//Test6();
 	//Test7();
+	Test8();
 
 	return 0;
 }
