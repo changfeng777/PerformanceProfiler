@@ -17,6 +17,7 @@
 
 void ResourceInfo::Update(LongType value)
 {
+	// value < 0时则直接返回不再更新。
 	if (value < 0)
 		return;
 
@@ -32,13 +33,13 @@ void ResourceInfo::Update(LongType value)
 }
 
 ResourceStatistics::ResourceStatistics()
-	:_isStatistics(false)
+	:_refCount(0)
 	,_statisticsThread(&ResourceStatistics::_Statistics, this)
 {
 	// 初始化统计资源信息
 #ifdef _WIN32
-	_lastKernelTime = 0;
-	_lastSystemTime = 0;
+	_lastKernelTime = -1;
+	_lastSystemTime = -1;
 	_processHandle = ::GetCurrentProcess();
 	_cpuCount = _GetCpuCount();
 #else
@@ -55,10 +56,13 @@ ResourceStatistics::~ResourceStatistics()
 
 void ResourceStatistics::StartStatistics()
 {
-	if (_isStatistics == false)
+	//
+	// 多个线程并行剖析一个代码段的场景下使用引用计数进行统计。
+	// 第一个线程进入剖析段时开始统计，最后一个线程出剖析段时
+	// 停止统计。
+	//
+	if (_refCount++ == 0)
 	{
-		_isStatistics.exchange(true);
-
 		unique_lock<std::mutex> lock(_lockMutex);
 		_condVariable.notify_one();
 	}
@@ -66,7 +70,12 @@ void ResourceStatistics::StartStatistics()
 
 void ResourceStatistics::StopStatistics()
 {
-	_isStatistics.exchange(false);
+	if (_refCount > 0)
+	{
+		--_refCount;
+		_lastKernelTime = -1;
+		_lastSystemTime = -1;
+	}
 }
 
 const ResourceInfo& ResourceStatistics::GetCpuInfo()
@@ -80,16 +89,18 @@ const ResourceInfo& ResourceStatistics::GetMemoryInfo()
 }
 
 ///////////////////////////////////////////////////
-// private
+// ResourceStatistics
+
+static const int CPU_TIME_SLICE_UNIT = 100;
 
 void ResourceStatistics::_Statistics()
 {
 	while (1)
 	{
 		//
-		// 未开始统计，则等待
+		// 未开始统计时，则使用条件变量阻塞。
 		//
-		if (_isStatistics == false)
+		if (_refCount++ == 0)
 		{
 			unique_lock<std::mutex> lock(_lockMutex);
 			_condVariable.wait(lock);
@@ -120,7 +131,7 @@ static LongType FileTimeToLongType(const FILETIME& fTime)
 int ResourceStatistics::_GetCpuCount()
 {
 	SYSTEM_INFO info;
-	GetSystemInfo(&info);
+	::GetSystemInfo(&info);
 
 	return info.dwNumberOfProcessors;
 }
@@ -147,7 +158,8 @@ LongType ResourceStatistics::_GetCpuUsageRate()
 {
 	LongType cpuRate = -1;
 
-	if (_lastSystemTime == 0 && _lastKernelTime == 0)
+	// 1.如果是剖析段重新开始的第一次统计，则更新最近的内核时间和系统时间
+	if (_lastSystemTime == -1 && _lastKernelTime == -1)
 	{
 		_lastSystemTime = GetTickCount();
 		_lastKernelTime = _GetKernelTime();
@@ -157,6 +169,7 @@ LongType ResourceStatistics::_GetCpuUsageRate()
 	LongType systemTimeInterval = GetTickCount() - _lastSystemTime;
 	LongType kernelTimeInterval = _GetKernelTime() - _lastKernelTime;
 
+	// 2.若耗费的系统时间值小于设定的时间片（CPU_TIME_SLICE_UNIT），则不计入统计。
 	if (systemTimeInterval > CPU_TIME_SLICE_UNIT)
 	{
 		cpuRate = kernelTimeInterval * 100 / systemTimeInterval;
@@ -209,31 +222,30 @@ void ResourceStatistics::_UpdateStatistics()
 }
 
 #else // Linux
-
 void ResourceStatistics::_UpdateStatistics()
-	{
-		char buf[1024] = { 0 };
-		char cmd[256] = { 0 };
-		sprintf(cmd, "ps -o pcpu,rss -p %d | sed 1,1d", _pid);
+{
+	char buf[1024] = { 0 };
+	char cmd[256] = { 0 };
+	sprintf(cmd, "ps -o pcpu,rss -p %d | sed 1,1d", _pid);
 
-		// 将 "ps" 命令的输出 通过管道读取 ("pid" 参数) 到 FILE* stream
-		// 将刚刚 stream 的数据流读取到buf中
-		FILE *stream = ::popen(cmd, "r");
-		::fread(buf, sizeof (char), 1024, stream);
-		::pclose(stream);
+	//
+	// 将 "ps" 命令的输出 通过管道读取 ("pid" 参数) 到 FILE* stream
+	// 将刚刚 stream 的数据流读取到buf中
+	// http://www.cnblogs.com/caosiyang/archive/2012/06/25/2560976.html
+	FILE *stream = ::popen(cmd, "r");
+	::fread(buf, sizeof (char), 1024, stream);
+	::pclose(stream);
 
-		double cpu = 0.0;
-		int rss = 0;
-		sscanf(buf, "%lf %d", &cpu, &rss);
+	double cpu = 0.0;
+	int rss = 0;
+	sscanf(buf, "%lf %d", &cpu, &rss);
 
-		_cpuInfo.Update(cpu);
-		_memoryInfo.Update(rss);
-	}
+	_cpuInfo.Update(cpu);
+	_memoryInfo.Update(rss);
+}
 #endif
 
-//////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////
-// IPC在线控制监听服务
 // IPCMonitorServer
 
 int GetProcessId()
@@ -258,133 +270,103 @@ const char* SERVER_PIPE_NAME = "tmp/performance_profiler/_fifo";
 string GetServerPipeName()
 {
 	string name = SERVER_PIPE_NAME;
-	//char idStr[10];
-	//_itoa(GetProcessId(), idStr, 10);
-	//name += idStr;
+	char idStr[10];
+	_itoa(GetProcessId(), idStr, 10);
+	name += idStr;
 	return name;
 }
 
-class IPCMonitorServer : public Singleton<IPCMonitorServer>
+IPCMonitorServer::IPCMonitorServer()
+	:_onMsgThread(&IPCMonitorServer::OnMessage, this)
 {
-	typedef void(*CmdFunc) (string& reply);
-	typedef map<string, CmdFunc> CmdFuncMap;
+	printf("%s IPC Monitor Server Start\n", GetServerPipeName().c_str());
 
-public:
-	// 启动IPC消息处理服务线程
-	void IPCMonitorServer::Start()
-	{}
+	_cmdFuncsMap["state"] = GetState;
+	_cmdFuncsMap["save"] = Save;
+	_cmdFuncsMap["disable"] = Disable;
+	_cmdFuncsMap["enable"] = Enable;
+}
 
-protected:
-	// IPC服务线程处理消息的函数
-	void IPCMonitorServer::OnMessage()
+void IPCMonitorServer::Start()
+{}
+
+void IPCMonitorServer::OnMessage()
+{
+	const int IPC_BUF_LEN = 1024;
+	char msg[IPC_BUF_LEN] = { 0 };
+	IPCServer server(GetServerPipeName().c_str());
+
+	while (1)
 	{
-		const int IPC_BUF_LEN = 1024;
-		char msg[IPC_BUF_LEN] = { 0 };
-		IPCServer server(GetServerPipeName().c_str());
+		server.ReceiverMsg(msg, IPC_BUF_LEN);
+		printf("Receiver Cmd Msg: %s\n", msg);
 
-		while (1)
+		string reply;
+		string cmd = msg;
+		CmdFuncMap::iterator it = _cmdFuncsMap.find(cmd);
+		if (it != _cmdFuncsMap.end())
 		{
-			server.ReceiverMsg(msg, IPC_BUF_LEN);
-			printf("Receiver Cmd Msg: %s\n", msg);
-
-			string reply;
-			string cmd = msg;
-			CmdFuncMap::iterator it = _cmdFuncsMap.find(cmd);
-			if (it != _cmdFuncsMap.end())
-			{
-				CmdFunc func = it->second;
-				func(reply);
-			}
-			else
-			{
-				reply = "Invalid Command";
-			}
-
-			server.SendReplyMsg(reply.c_str(), reply.size());
+			CmdFunc func = it->second;
+			func(reply);
 		}
-	}
-
-	//
-	// 以下均为消息处理函数
-	//
-	static void GetState(string& reply)
-	{
-		reply += "State:";
-		int flag = ConfigManager::GetInstance()->GetOptions();
-
-		if (flag == PPCO_NONE)
+		else
 		{
-			reply += "None\n";
-			return;
+			reply = "Invalid Command";
 		}
 
-		if (flag & PPCO_PROFILER)
-		{
-			reply += "Performance Profiler \n";
-		}
-
-		if (flag & PPCO_SAVE_TO_CONSOLE)
-		{
-			reply += "Save To Console\n";
-		}
-
-		if (flag & PPCO_SAVE_TO_FILE)
-		{
-			reply += "Save To File\n";
-		}
+		server.SendReplyMsg(reply.c_str(), reply.size());
 	}
+}
 
-	static void Enable(string& reply)
+void IPCMonitorServer::GetState(string& reply)
+{
+	reply += "State:";
+	int flag = ConfigManager::GetInstance()->GetOptions();
+
+	if (flag == PPCO_NONE)
 	{
-		ConfigManager::GetInstance()->SetOptions(PPCO_PROFILER| PPCO_SAVE_TO_FILE);
-
-		reply += "Enable Success";
+		reply += "None\n";
+		return;
 	}
 
-	static void Disable(string& reply)
+	if (flag & PPCO_PROFILER)
 	{
-		ConfigManager::GetInstance()->SetOptions(PPCO_NONE);
-
-		reply += "Disable Success";
+		reply += "Performance Profiler \n";
 	}
 
-	static void Save(string& reply)
+	if (flag & PPCO_SAVE_TO_CONSOLE)
 	{
-		ConfigManager::GetInstance()->SetOptions(
-			ConfigManager::GetInstance()->GetOptions() | PPCO_SAVE_TO_FILE);
-		PerformanceProfiler::GetInstance()->OutPut();
-
-		reply += "Save Success";
+		reply += "Save To Console\n";
 	}
 
-	static void Print(string& reply)
+	if (flag & PPCO_SAVE_TO_FILE)
 	{
-		ConfigManager::GetInstance()->SetOptions(
-			ConfigManager::GetInstance()->GetOptions()| PPCO_SAVE_TO_FILE);
-
-		// 这里应该把将剖析信息发回给管道客户端！
-		PerformanceProfiler::GetInstance()->OutPut();
-
-		reply += "Print Success";
+		reply += "Save To File\n";
 	}
-protected:
-	IPCMonitorServer::IPCMonitorServer()
-		:_onMsgThread(&IPCMonitorServer::OnMessage, this)
-	{
-		printf("%s IPC Monitor Server Start\n", GetServerPipeName().c_str());
+}
 
-		_cmdFuncsMap["state"] = GetState;
-		_cmdFuncsMap["save"] = Save;
-		_cmdFuncsMap["print"] = Print;
-		_cmdFuncsMap["disable"] = Disable;
-		_cmdFuncsMap["enable"] = Enable;
-	}
+void IPCMonitorServer::Enable(string& reply)
+{
+	ConfigManager::GetInstance()->SetOptions(PPCO_PROFILER | PPCO_SAVE_TO_FILE);
 
-	friend class Singleton<IPCMonitorServer>;
-private:
-	thread	_onMsgThread;			// 处理消息线程
-	CmdFuncMap _cmdFuncsMap;		// 消息命令到执行函数的映射表
-};
+	reply += "Enable Success";
+}
+
+void IPCMonitorServer::Disable(string& reply)
+{
+	ConfigManager::GetInstance()->SetOptions(PPCO_NONE);
+
+	reply += "Disable Success";
+}
+
+void IPCMonitorServer::Save(string& reply)
+{
+	ConfigManager::GetInstance()->SetOptions(
+		ConfigManager::GetInstance()->GetOptions() | PPCO_SAVE_TO_FILE);
+	PerformanceProfiler::GetInstance()->OutPut();
+
+	reply += "Save Success";
+}
 
 //////////////////////////////////////////////////////////////
 // 代码段效率剖析
@@ -447,7 +429,6 @@ bool PerformanceNode::operator == (const PerformanceNode& p) const
 		&&_function == p._function
 		&&_line == p._line;
 }
-
 
 void PerformanceNode::Serialize(SaveAdapter& SA) const
 {
@@ -519,7 +500,7 @@ PerformanceProfilerSection* PerformanceProfiler::CreateSection(const char* fileN
 	return section;
 }
 
-void PerformanceProfilerSection::begin(int threadId)
+void PerformanceProfilerSection::Begin(int threadId)
 {
 	unique_lock<mutex> Lock(_mutex);
 
@@ -544,7 +525,7 @@ void PerformanceProfilerSection::begin(int threadId)
 	++_totalRef;
 }
 
-void PerformanceProfilerSection::end(int threadId)
+void PerformanceProfilerSection::End(int threadId)
 {
 	unique_lock<mutex> Lock(_mutex);
 

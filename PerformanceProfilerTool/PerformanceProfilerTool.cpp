@@ -43,7 +43,6 @@ void UsageHelpInfo ()
 	printf ("    <state>:   Show the state of the Performance ProfilerTool.\n");
 	printf ("    <enable>:  Force enable performance profiler.\n");
 	printf ("    <disable>: Force disable performance profiler.\n");
-	printf ("    <print>:   Print the results to the console.\n");
 	printf ("    <save>:    Save the results to file.\n");
 }
 
@@ -85,19 +84,19 @@ void PerformanceProfilerToolClient(const string& idStr)
 int main(int argc, char** argv)
 {
 	string idStr;
-	/*if (argc == 2 && !strcmp(argv[1], "-help"))
+	if (argc == 2 && !strcmp(argv[1], "-help"))
 	{
 		UsageHelpInfo();
 
 	}
-	else if(argc == 3 && !strcmp(argv[1], "-pid"))
+	else if (argc == 3 && !strcmp(argv[1], "-pid"))
 	{
 		idStr += argv[2];
 	}
 	else
 	{
 		UsageHelp();
-	}*/
+	}
 
 	PerformanceProfilerToolClient(idStr);
 

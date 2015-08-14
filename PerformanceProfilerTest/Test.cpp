@@ -30,89 +30,89 @@ void Test1()
 	PERFORMANCE_PROFILER_EE_END(PP2);
 }
 
-//void MutilTreadRun(int count)
-//{
-//	while (count--)
-//	{
-//		PERFORMANCE_PROFILER_EE_BEGIN(PP1, "PP1");
-//
-//		std::this_thread::sleep_for(std::chrono::milliseconds(500));
-//
-//		PERFORMANCE_PROFILER_EE_END(PP1);
-//
-//		PERFORMANCE_PROFILER_EE_BEGIN(PP2, "PP2");
-//
-//		std::this_thread::sleep_for(std::chrono::milliseconds(800));
-//
-//		PERFORMANCE_PROFILER_EE_END(PP2);
-//	}
-//}
-//
-//// 2.≤‚ ‘∂‡œﬂ≥Ã≥°æ∞
-//void Test2()
-//{
-//	thread t1(MutilTreadRun, 5);
-//	thread t2(MutilTreadRun, 4);
-//	thread t3(MutilTreadRun, 3);
-//
-//	t1.join();
-//	t2.join();
-//	t3.join();
-//}
-//
-//// 3.≤ª∆•≈‰≥°æ∞
-//void Test3()
-//{
-//	// 2.’˝≥£∆•≈‰
-//	PERFORMANCE_PROFILER_EE_BEGIN(PP1, "∆•≈‰");
-//
-//	for (int i = 0; i < 10; ++i)
-//	{
-//		std::this_thread::sleep_for(std::chrono::milliseconds(200));
-//	}
-//
-//	PERFORMANCE_PROFILER_EE_END(PP1);
-//
-//	// 2.≤ª∆•≈‰
-//	PERFORMANCE_PROFILER_EE_BEGIN(PP2, "≤ª∆•≈‰");
-//
-//	for (int i = 0; i < 10; ++i)
-//	{
-//		std::this_thread::sleep_for(std::chrono::milliseconds(200));
-//		PERFORMANCE_PROFILER_EE_END(PP2);
-//	}
-//}
-//
-//int Fib(int n)
-//{
-//	PERFORMANCE_PROFILER_EE_BEGIN(Fib2, "∆ Œˆµ›πÈ");
-//
-//	std::this_thread::sleep_for(std::chrono::milliseconds(10));
-//
-//	int ret;
-//	if (n <= 1)
-//	{
-//		ret = n;
-//	}
-//	else
-//	{
-//		ret = Fib(n - 1) + Fib(n - 2);
-//	}
-//
-//	PERFORMANCE_PROFILER_EE_END(Fib2);
-//
-//	return ret;
-//}
-//
-//// 4.µ›πÈ
-//void Test4()
-//{
-//	PERFORMANCE_PROFILER_EE_BEGIN(Fib1, "’˝≥£");
-//
-//	Fib(10);
-//
-//	PERFORMANCE_PROFILER_EE_END(Fib1);
-//}
+void MutilTreadRun(int count)
+{
+	while (count--)
+	{
+		PERFORMANCE_PROFILER_EE_BEGIN(PP1, "PP1");
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+		PERFORMANCE_PROFILER_EE_END(PP1);
+
+		PERFORMANCE_PROFILER_EE_BEGIN(PP2, "PP2");
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(800));
+
+		PERFORMANCE_PROFILER_EE_END(PP2);
+	}
+}
+
+// 2.≤‚ ‘∂‡œﬂ≥Ã≥°æ∞
+void Test2()
+{
+	thread t1(MutilTreadRun, 5);
+	thread t2(MutilTreadRun, 4);
+	thread t3(MutilTreadRun, 3);
+
+	t1.join();
+	t2.join();
+	t3.join();
+}
+
+// 3.≤ª∆•≈‰≥°æ∞
+void Test3()
+{
+	// 2.’˝≥£∆•≈‰
+	PERFORMANCE_PROFILER_EE_BEGIN(PP1, "∆•≈‰");
+
+	for (int i = 0; i < 10; ++i)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
+
+	PERFORMANCE_PROFILER_EE_END(PP1);
+
+	// 2.≤ª∆•≈‰
+	PERFORMANCE_PROFILER_EE_BEGIN(PP2, "≤ª∆•≈‰");
+
+	for (int i = 0; i < 10; ++i)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		PERFORMANCE_PROFILER_EE_END(PP2);
+	}
+}
+
+int Fib(int n)
+{
+	PERFORMANCE_PROFILER_EE_BEGIN(Fib2, "∆ Œˆµ›πÈ");
+
+	std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+	int ret;
+	if (n <= 1)
+	{
+		ret = n;
+	}
+	else
+	{
+		ret = Fib(n - 1) + Fib(n - 2);
+	}
+
+	PERFORMANCE_PROFILER_EE_END(Fib2);
+
+	return ret;
+}
+
+// 4.µ›πÈ
+void Test4()
+{
+	PERFORMANCE_PROFILER_EE_BEGIN(Fib1, "’˝≥£");
+
+	Fib(10);
+
+	PERFORMANCE_PROFILER_EE_END(Fib1);
+}
 
 void Test5()
 {
@@ -161,7 +161,7 @@ void Test6()
 
 		PERFORMANCE_PROFILER_EE_RS_END(PERFORMANCE_PROFILER_EE_RS);
 
-		//PerformanceProfiler::GetInstance()->OutPut();
+		PerformanceProfiler::GetInstance()->OutPut();
 
 		this_thread::sleep_for(std::chrono::milliseconds(1000));
 	}
@@ -181,8 +181,8 @@ int main()
 	//Test3();
 	//Test4();
 	//Test5();
-	//Test6();
-	Test7();
+	Test6();
+	//Test7();
 
 	return 0;
 }

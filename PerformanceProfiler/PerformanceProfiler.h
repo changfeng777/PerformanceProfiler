@@ -28,12 +28,13 @@ using namespace std;
 
 typedef long long LongType;
 
-#if(defined(_WIN32) && defined(_IMPORT))
+
+#if(defined(_WIN32) && defined(IMPORT))
 	#define API_EXPORT _declspec(dllimport)
 #elif _WIN32
 	#define API_EXPORT _declspec(dllexport)
 #else
-	#define API_EXPORT
+#define API_EXPORT
 #endif
 
 //
@@ -178,14 +179,15 @@ struct ResourceInfo
 	LongType _count;  // 次数
 
 	ResourceInfo()
-		: _peak(0), _avg(0), _total(0),_count(0)
+		: _peak(0)
+		,_avg(0)
+		, _total(0)
+		,_count(0)
 	{}
 
 	void Update(LongType value);
 	void Serialize(SaveAdapter& SA) const;
 };
-
-static const int CPU_TIME_SLICE_UNIT = 100;
 
 // 资源统计
 class ResourceStatistics
@@ -207,7 +209,7 @@ public:
 private:
 	void _Statistics();
 
-// Windows下计算资源占用
+// Windows和Linux下实现资源统计
 #ifdef _WIN32
 	// 获取CPU个数 / 获取内核时间
 	int _GetCpuCount();
@@ -237,13 +239,44 @@ public:
 
 	ResourceInfo _cpuInfo;				// CPU信息
 	ResourceInfo _memoryInfo;			// 内存信息
-	ResourceInfo _readIOInfo;			// 读数据信息
-	ResourceInfo _writeIOInfo;			// 写数据的信息
+	//ResourceInfo _readIOInfo;			// 读数据信息
+	//ResourceInfo _writeIOInfo;		// 写数据的信息
 
-	atomic<bool> _isStatistics;			// 是否进行统计的标志
-	mutex	_lockMutex;					// 线程互斥锁
+	atomic<int> _refCount;				// 引用计数
+	mutex _lockMutex;					// 线程互斥锁
 	condition_variable _condVariable;	// 控制是否进行统计的条件变量
 	thread _statisticsThread;			// 统计线程
+};
+
+//////////////////////////////////////////////////////////////////////
+// IPC在线控制监听服务
+
+class IPCMonitorServer : public Singleton<IPCMonitorServer>
+{
+	friend class Singleton<IPCMonitorServer>;
+	typedef void(*CmdFunc) (string& reply);
+	typedef map<string, CmdFunc> CmdFuncMap;
+
+public:
+	// 启动IPC消息处理服务线程
+	void IPCMonitorServer::Start();
+
+protected:
+	// IPC服务线程处理消息的函数
+	void IPCMonitorServer::OnMessage();
+
+	//
+	// 以下均为观察者模式中，对应命令消息的的处理函数
+	//
+	static void GetState(string& reply);
+	static void Enable(string& reply);
+	static void Disable(string& reply);
+	static void Save(string& reply);
+
+	IPCMonitorServer();
+private:
+	thread	_onMsgThread;			// 处理消息线程
+	CmdFuncMap _cmdFuncsMap;		// 消息命令到执行函数的映射表
 };
 
 ///////////////////////////////////////////////////////////////////////////
@@ -262,7 +295,10 @@ struct API_EXPORT PerformanceNode
 	PerformanceNode(const char* fileName, const char* function,
 		int line, const char* desc);
 
+	//
 	// 做map键值，所以需要重载operator<
+	// 做unorder_map键值，所以需要重载operator==
+	//
 	bool operator<(const PerformanceNode& p) const;
 	bool operator==(const PerformanceNode& p) const;
 
@@ -284,7 +320,7 @@ static size_t BKDRHash(const char *str)
 	return (hash & 0x7FFFFFFF);
 }
 
-// PerformanceNode做非排序容器key的Hash算法
+// 实现PerformanceNodeHash仿函数做unorder_map的比较器
 class PerformanceNodeHash
 {
 public:
@@ -313,8 +349,8 @@ public:
 		, _rsStatistics(0)
 	{}
 
-	void begin(int threadId);
-	void end(int threadId);
+	void Begin(int threadId);
+	void End(int threadId);
 
 	void Serialize(SaveAdapter& SA);
 private:
@@ -322,7 +358,7 @@ private:
 	StatisMap _beginTimeMap;		// 开始时间统计
 	StatisMap _costTimeMap;			// 花费时间统计
 
-	StatisMap _refCountMap;			// 引用计数(解决剖析段首尾不匹配，递归测试)
+	StatisMap _refCountMap;			// 引用计数(解决剖析段首尾不匹配，递归函数内部段剖析)
 	LongType _totalRef;				// 总的引用计数
 
 	StatisMap _callCountMap;		// 调用次数统计
@@ -362,14 +398,14 @@ private:
 	if (ConfigManager::GetInstance()->GetOptions()&PPCO_PROFILER)		\
 	{																	\
 		PPS_##sign = PerformanceProfiler::GetInstance()->CreateSection(__FILE__, __FUNCTION__, __LINE__, desc, isStatistics);\
-		PPS_##sign->begin(GetThreadId());								\
+		PPS_##sign->Begin(GetThreadId());								\
 	}
 
 // 添加性能剖析段结束
 #define ADD_PERFORMANCE_PROFILE_SECTION_END(sign)	\
 	do{												\
 		if(PPS_##sign)								\
-			PPS_##sign->end(GetThreadId());			\
+			PPS_##sign->End(GetThreadId());			\
 	}while(0);
 
 //
@@ -388,7 +424,8 @@ private:
 	ADD_PERFORMANCE_PROFILE_SECTION_END(sign)
 
 //
-// 剖析【效率&资源】开始
+// 剖析【效率&资源】开始。
+// ps：非必须情况，尽量少用资源统计段，因为每个资源统计段都会开一个线程进行统计
 // @sign是剖析段唯一标识，构造出唯一的剖析段变量
 // @desc是剖析段描述
 //
@@ -397,6 +434,7 @@ private:
 
 //
 // 剖析【效率&资源】结束
+// ps：非必须情况，尽量少用资源统计段，因为每个资源统计段都会开一个线程进行统计
 // @sign是剖析段唯一标识
 //
 #define PERFORMANCE_PROFILER_EE_RS_END(sign)		\
